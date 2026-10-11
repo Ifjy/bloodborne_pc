@@ -105,6 +105,9 @@ int main(void) {
     unlink(config);
     /* Mouse: names, the look stick's speed-to-deflection at two frame rates, the wheel's presses. */
     assert(key_from_name("Mouse Left")==MOUSE_KEY+SDL_BUTTON_LEFT && key_from_name("wheel down")==MOUSE_WHEEL_DOWN);
+    /* Multi-word scancode names keep their inner space: "leftshift" does not parse (a bbport.ini
+     * line silently loses the whole binding), "left shift" does. */
+    assert(key_from_name("left shift")==SDL_SCANCODE_LSHIFT && key_from_name("leftshift")==-1);
     for (int rate=60;rate<=240;rate*=4) {
         PadData m; memset(&m,0,sizeof m);
         look_x=look_y=0; look_last_us=1;
