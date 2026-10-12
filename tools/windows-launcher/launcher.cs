@@ -1,10 +1,15 @@
 /* Bloodborne PC launcher (exe twin of start_lazy.bat, made for adding to Steam).
- * Sets the same environment and starts scripts/run_windows.py with the portable Python. */
+ * Sets the same environment and starts scripts/run_game.py with the portable Python.
+ * The run's whole console output is teed to out\last-run.log (a run that exits nonzero
+ * is copied to out\crash-<date>.log): the game's fault handler prints its stack there. */
 using System;
 using System.Diagnostics;
 using System.IO;
 
 class BloodbornePCLauncher {
+    static readonly object logLock = new object();
+    static StreamWriter log;
+
     static int Main(string[] args) {
         string root = AppDomain.CurrentDomain.BaseDirectory;
         string python = Path.Combine(root, "python", "python.exe");
@@ -14,6 +19,13 @@ class BloodbornePCLauncher {
         if (!File.Exists(python)) { Wait("ERROR: portable Python not found:\n  " + python); return 1; }
         if (!File.Exists(Path.Combine(game, "eboot.bin"))) { Wait("ERROR: eboot.bin not found:\n  " + Path.Combine(game, "eboot.bin")); return 1; }
         if (!File.Exists(Path.Combine(runtime, "SDL3.dll"))) { Wait("ERROR: runtime DLLs not found:\n  " + runtime); return 1; }
+
+        string outDir = Path.Combine(root, "out");
+        string logPath = Path.Combine(outDir, "last-run.log");
+        try {
+            Directory.CreateDirectory(outDir);
+            log = new StreamWriter(logPath, false, System.Text.Encoding.UTF8) { AutoFlush = true };
+        } catch (IOException) { log = null; }
 
         Environment.SetEnvironmentVariable("PYTHONUTF8", "1");
         Environment.SetEnvironmentVariable("PYTHONIOENCODING", "utf-8");
@@ -29,23 +41,45 @@ class BloodbornePCLauncher {
             Arguments = Quote(Path.Combine(root, "scripts", "run_game.py")) + " --game-dir " + Quote(game)
                         + (args.Length > 0 ? " " + string.Join(" ", Array.ConvertAll(args, Quote)) : ""),
             WorkingDirectory = root,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
-        Console.WriteLine("Bloodborne PC - exe launcher");
-        Console.WriteLine("Root:    " + root);
-        Console.WriteLine("Game:    " + game);
-        Console.WriteLine("Python:  " + python);
-        Console.WriteLine("Build:   PREBUILT");
-        Console.WriteLine("Starting Bloodborne...");
+        Line("Bloodborne PC - exe launcher");
+        Line("Root:    " + root);
+        Line("Game:    " + game);
+        Line("Python:  " + python);
+        Line("Build:   PREBUILT");
+        Line("Log:     " + logPath);
+        Line("Starting Bloodborne...");
         using (var p = Process.Start(psi)) {
+            p.OutputDataReceived += (s, e) => Line(e.Data, false);
+            p.ErrorDataReceived += (s, e) => Line(e.Data, true);
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
             p.WaitForExit();
             int code = p.ExitCode;
-            Console.WriteLine();
-            Console.WriteLine("Bloodborne PC exited with code " + code);
-            if (code != 0) Wait("");
+            Line("");
+            Line("Bloodborne PC exited with code " + code);
+            lock (logLock) { if (log != null) log.Close(); log = null; }
+            if (code != 0 && File.Exists(logPath)) {
+                string crashPath = Path.Combine(outDir, "crash-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
+                try { File.Copy(logPath, crashPath); Line2Console("Crash log: " + crashPath); } catch (IOException) { }
+                Wait("");
+            }
             return code;
         }
     }
+
+    /* One child line: to the console (its stream) and to the log file. */
+    static void Line(string line, bool isError = false) {
+        if (line == null) return;
+        if (isError) Console.Error.WriteLine(line); else Console.WriteLine(line);
+        lock (logLock) { if (log != null) log.WriteLine(line); }
+    }
+    static void Line2Console(string line) { Console.WriteLine(line); }
 
     static string Quote(string s) { return "\"" + s + "\""; }
     static void Wait(string msg) {
