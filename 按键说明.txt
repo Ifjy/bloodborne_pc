@@ -12,6 +12,8 @@
 
 【移动 / 视角】────────────────────────────
   W / A / S / D      走路(前后左右)
+  左Ctrl(按住)      慢走:无声、不惊动敌人,背后偷袭用
+                      (按住时 WASD = 轻推摇杆,可调 walk_percent)
   方向键 ↑↓←→        转视角
   鼠标移动           转视角(先进游戏画面点一下捕获鼠标)
   F1                 释放鼠标(切出去干别的事)
@@ -72,6 +74,8 @@
     (写成 leftshift 会解析失败,这个动作就整行没有按键!)
   鼠标键名: Mouse Left/Right/Middle · Mouse X1(侧键前) · Mouse X2(侧键后)
     · Wheel Up / Wheel Down
+  慢走: walk_key=left ctrl(按住生效,可多个键)
+    · walk_percent=35(推杆幅度 5~100,越小越慢越安静)
   动作名: cross circle square triangle l1 r1 l2 r2 l3 r3 options
     touchpad up down left right move_* look_*
   手柄: pad.动作=SDL手柄键名(south east west north leftshoulder...)
@@ -79,6 +83,7 @@
 【本机已做的自定义(亚版实测有效)】──────────
   key.cross=left shift   左Shift=✕(闪避/冲刺/菜单取消)
   key.circle=space       空格=○(互动/菜单确认)
+  慢走默认左Ctrl 35%(内置,无需写进 ini)
   mouse_sensitivity=2    鼠标视角 2 倍速
   fullscreen=1           全屏启动
 ════════════════════════════════════════════════════════════════════

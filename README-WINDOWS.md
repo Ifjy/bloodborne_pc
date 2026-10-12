@@ -63,15 +63,20 @@ Everything is remappable in `bbport.ini` without a rebuild:
 mouse_look=1        # the window takes the mouse on a click; F1 releases it
 mouse_sensitivity=1.0
 key.cross=space     # any input name: cross circle square triangle l1 r1 l2 r2 l3 r3
-key.circle=lshift   #   options touchpad up down left right move_* look_*
+key.circle=left shift   #   options touchpad up down left right move_* look_*
+walk_key=left ctrl  # held, the move keys tilt the stick only walk_percent % (silent walk)
+walk_percent=35
 pad.r1=a            # gamepad buttons by SDL names
 ```
 
 Mouse defaults: left R1 (light attack), right L2 (gun), middle R3 (lock-on),
-X1 R2, X2 L1, wheel up/down = quick items.
+X1 R2, X2 L1, wheel up/down = quick items. Multi-word key names keep their
+inner space ("left shift", "left ctrl"): "leftshift" does not parse, and the
+binding is silently lost.
 
-**Asian game dumps** (CUSA01363 &co.) use the Japanese convention — Circle confirms,
-Cross cancels — so swap them:
+**Asian game dumps** (CUSA01363 &co.) swap the whole pair — Circle is interact +
+menu confirm, Cross is dodge/sprint + menu cancel — so swap the keys to keep
+LShift dodging and Space interacting:
 
 ```
 key.cross=lshift

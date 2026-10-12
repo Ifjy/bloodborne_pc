@@ -2,6 +2,13 @@
 #include <assert.h>
 #include <unistd.h>
 #include "../src/runtime_pad.c"
+#ifdef _WIN32
+/* POSIX temp paths and setenv: the native Windows build runs from the repo root. */
+#define setenv(name,value,overwrite) _putenv_s(name,value)
+#define TEST_TMP "pad-test-"
+#else
+#define TEST_TMP "/tmp/pad-test-"
+#endif
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
@@ -18,21 +25,26 @@ static void inject(const char *path, const char *tokens) {
     assert(f);
     fputs(tokens,f);
     fclose(f);
+#ifdef _WIN32
+    usleep(1100000); /* read_inject skips same-second mtimes on Windows */
+#else
     usleep(25000);
+#endif
 }
 
 int main(void) {
-    char path[]="/tmp/bbport-pad-test-XXXXXX";
+    char path[]=TEST_TMP "test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);
     close(fd);
     setenv("BB_PAD_FILE",path,1);
     /* bbport.ini controls: buttons moved, a trigger as a button and a button as a trigger. */
-    char config[]="/tmp/bbport-pad-config-XXXXXX";
+    char config[]=TEST_TMP "config-XXXXXX";
     int config_fd=mkstemp(config);
     assert(config_fd>=0);
     const char controls[]="upscaler=fsr3\npad.cross=b\npad.circle=a\npad.r2=rightshoulder\n"
-                          "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n";
+                          "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n"
+                          "walk_key=left ctrl, left alt\nwalk_percent=40\n";
     assert(write(config_fd,controls,sizeof(controls)-1)==(ssize_t)(sizeof(controls)-1));
     close(config_fd);
     setenv("BB_CONFIG",config,1);
@@ -96,6 +108,22 @@ int main(void) {
     assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
+    /* Walk: walk_key/walk_percent from the config; held, the move keys tilt the stick only part
+     * of the way (the silent walk), the look keys keep the full tilt. */
+    assert(walk_percent==40 && walk_key_count==2 && walk_keys[0]==SDL_SCANCODE_LCTRL &&
+           walk_keys[1]==SDL_SCANCODE_LALT);
+    {
+        bool keys[SDL_SCANCODE_COUNT];
+        memset(keys,0,sizeof keys);
+        keys[SDL_SCANCODE_W]=keys[SDL_SCANCODE_UP]=keys[SDL_SCANCODE_LALT]=true;
+        PadData walk; memset(&walk,0,sizeof walk);
+        walk.left_x=walk.left_y=walk.right_x=walk.right_y=128;
+        apply_keyboard(&walk,keys);
+        assert(walk.left_y==128-40*128/100 && walk.right_y==0);
+        keys[SDL_SCANCODE_LALT]=false;
+        apply_keyboard(&walk,keys);
+        assert(walk.left_y==0 && walk.right_y==0);
+    }
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;

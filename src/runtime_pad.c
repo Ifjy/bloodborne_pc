@@ -6,6 +6,8 @@
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
  *   IJKL d-pad (I up, K down, J left, L right).
+ *   Left Ctrl walks: held, the move keys tilt the stick only walk_percent
+ *   (bbport.ini, default 35)% of the way — the slow, silent walk (walk_key= to change).
  *   Mouse (once the game window is clicked; F1 or leaving the window releases it): look (the
  *   right stick), Left R1, Right L2, Middle R3, side buttons R2 (X1) and L1 (X2), wheel the
  *   d-pad's up/down (quick items).
@@ -317,6 +319,9 @@ enum { PAD_LEFT_TRIGGER=SDL_GAMEPAD_BUTTON_COUNT, PAD_RIGHT_TRIGGER }; /* trigge
 typedef struct { int key_count, pad_count; int keys[MAX_BIND]; int pad[MAX_BIND]; } Binding;
 static Binding bindings[IN_COUNT];
 static int bindings_ready;
+/* Walk (bbport.ini): walk_key (default Left Ctrl), several comma-separated allowed;
+ * walk_percent (default 35) is the move keys' tilt as % of full. */
+static int walk_keys[MAX_BIND], walk_key_count=-1, walk_percent=35;
 
 static void bind_defaults(void) {
     static const struct { int input; int key; } keys[]={
@@ -372,6 +377,7 @@ static float mouse_sensitivity=1.0f;
 static void load_bindings(void) {
     bind_defaults();
     mouse_look=1; mouse_invert_y=0; mouse_sensitivity=1.0f;
+    walk_key_count=-1; walk_percent=35;
     const char *path=getenv("BB_CONFIG");
     FILE *f=path ? fopen(path,"r") : NULL;
     if (!f) return;
@@ -386,6 +392,22 @@ static void load_bindings(void) {
             else if (!strncmp(line,"mouse_sensitivity=",18)) {
                 const float v=strtof(value,NULL);
                 if (v>=0.05f && v<=20.0f) mouse_sensitivity=v;
+            }
+            else if (!strncmp(line,"walk_key=",9)) {
+                walk_key_count=0;
+                for (char *name=strtok(eq+1,",\r\n"); name; name=strtok(NULL,",\r\n")) {
+                    while (*name==' ') ++name;
+                    for (char *end=name+strlen(name); end>name && end[-1]==' ';) *--end=0;
+                    if (!*name) continue;
+                    const int s=key_from_name(name);
+                    if (s<0) printf("Runtime: controls: unknown key \"%s\" for walk_key\n",name);
+                    else if (walk_key_count<MAX_BIND) walk_keys[walk_key_count++]=s;
+                }
+            }
+            else if (!strncmp(line,"walk_percent=",13)) {
+                const int v=atoi(value);
+                if (v>=5 && v<=100) walk_percent=v;
+                else puts("Runtime: controls: walk_percent stays (5..100)");
             }
             continue;
         }
@@ -453,9 +475,24 @@ static int pad_value(SDL_Gamepad *g, int input) {
     return value;
 }
 
-/* key held for the negative / positive direction: the stick all the way, else the gamepad's. */
-static uint8_t key_axis(uint8_t value, int negative, int positive) {
-    return negative || positive ? (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0)) : value;
+/* key held for the negative / positive direction: the stick all the way, else the gamepad's.
+ * Walking (walk_down): the move keys tilt only walk_percent of the way — the game's slow,
+ * silent walk (a pad does it with a gentle stick tilt); the look keys are not slowed. */
+static uint8_t key_axis(uint8_t value, int negative, int positive, int walk) {
+    if (!negative && !positive) return value;
+    if (!walk) return (uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0));
+    const int tilt=walk_percent*128/100;
+    int v=128+(negative ? -tilt : tilt);
+    if (v>255) v=255;
+    return (uint8_t)v;
+}
+static int walk_down(const bool *k) {
+    if (walk_key_count<0) { walk_keys[0]=SDL_SCANCODE_LCTRL; walk_key_count=1; }
+    for (int i=0;i<walk_key_count;++i) {
+        const int code=walk_keys[i];
+        if (code>=MOUSE_KEY ? mouse_key_down(code) : k && k[code]) return 1;
+    }
+    return 0;
 }
 static void apply_keyboard(PadData *d, const bool *k) {
     for (int i=IN_CROSS;i<=IN_RIGHT;++i)
@@ -464,10 +501,11 @@ static void apply_keyboard(PadData *d, const bool *k) {
     if (key_down(k,IN_TOUCHPAD_RIGHT)) touch_click(d,1);
     if (key_down(k,IN_L2)) d->l2=255;
     if (key_down(k,IN_R2)) d->r2=255;
-    d->left_x=key_axis(d->left_x,key_down(k,IN_MOVE_LEFT),key_down(k,IN_MOVE_RIGHT));
-    d->left_y=key_axis(d->left_y,key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN));
-    d->right_x=key_axis(d->right_x,key_down(k,IN_LOOK_LEFT),key_down(k,IN_LOOK_RIGHT));
-    d->right_y=key_axis(d->right_y,key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN));
+    const int walk=walk_down(k);
+    d->left_x=key_axis(d->left_x,key_down(k,IN_MOVE_LEFT),key_down(k,IN_MOVE_RIGHT),walk);
+    d->left_y=key_axis(d->left_y,key_down(k,IN_MOVE_UP),key_down(k,IN_MOVE_DOWN),walk);
+    d->right_x=key_axis(d->right_x,key_down(k,IN_LOOK_LEFT),key_down(k,IN_LOOK_RIGHT),0);
+    d->right_y=key_axis(d->right_y,key_down(k,IN_LOOK_UP),key_down(k,IN_LOOK_DOWN),0);
 }
 
 /* Mouse look: the game turns its camera at a rate set by the right stick, so the stick follows
