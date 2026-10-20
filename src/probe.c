@@ -18,6 +18,7 @@
 #include <psapi.h>
 #include <tlhelp32.h>
 #include <wchar.h>
+#include <io.h>
 #else
 #include <sys/mman.h>
 #include <malloc.h>
@@ -236,7 +237,15 @@ static __attribute__((noreturn)) void terminate(unsigned code) {
 }
 static void report_exception(EXCEPTION_POINTERS *e) {
     static volatile LONG reporting;
-    if (InterlockedExchange(&reporting, 1)) { Sleep(INFINITE); }
+    if (InterlockedExchange(&reporting, 1)) {
+        /* A fault inside the reporter itself (the stdio/heap it prints through is broken):
+         * say so past the CRT buffers and die, instead of hanging until WER kills the process
+         * with the raw exception code and nothing of the report reaching the console. */
+        static const char msg[] = "fault handler: another fault while reporting\n";
+        _write(2, msg, sizeof msg - 1);
+        TerminateProcess(GetCurrentProcess(), 128 + 11);
+        _exit(128 + 11);
+    }
     EXCEPTION_RECORD *r = e->ExceptionRecord;
     CONTEXT *c = e->ContextRecord;
     char where[512];
@@ -696,6 +705,10 @@ int main(int argc, char **argv) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    /* Unbuffered too: through the launcher's pipe stderr is block-buffered, and a fault in
+     * the middle of the fault report (stdio/heap already broken) would keep what was printed
+     * in the buffer forever - the crash then leaves no report at all. */
+    setvbuf(stderr, NULL, _IONBF, 0);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */

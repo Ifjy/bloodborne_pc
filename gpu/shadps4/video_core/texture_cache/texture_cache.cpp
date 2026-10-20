@@ -831,40 +831,48 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
 ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc) {
     Image& image = slot_images[image_id];
     WatchImage(image, "depth target");
-    image.flags |= ImageFlagBits::GpuModified;
-    image.gpu_write_tick = scheduler.CurrentTick();
-    image.usage.depth_target = 1u;
-    UpdateImage(image_id);
+    // bbport: this ran without the cache mutex, from the draw threads, while OnSubmit's garbage
+    // collector walked the same LRU / page table under it: under memory pressure (evictions on
+    // every submission) a stencil registration racing the collector corrupted the lists, and the
+    // game died of heap corruption (0xc0000005 in ucrtbase, mid-printf). UpdateImage locks the
+    // mutex itself on its slow path, so it stays out of this critical section.
+    {
+        std::scoped_lock lock{mutex};
+        image.flags |= ImageFlagBits::GpuModified;
+        image.gpu_write_tick = scheduler.CurrentTick();
+        image.usage.depth_target = 1u;
 
-    // Register meta data for this depth buffer
-    if (desc.info.meta_info.htile_addr) {
-        surface_metas.emplace(desc.info.meta_info.htile_addr,
-                              MetaDataInfo{.type = MetaType::HTile,
-                                           .clear_mask = image.info.meta_info.htile_clear_mask});
-        image.info.meta_info.htile_addr = desc.info.meta_info.htile_addr;
-    }
-
-    // If there is a stencil attachment, link depth and stencil.
-    if (desc.info.stencil_addr != 0) {
-        ImageId stencil_id{};
-        ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
-                             [&](ImageId image_id, Image& image) {
-                                 if (image.info.guest_address == desc.info.stencil_addr) {
-                                     stencil_id = image_id;
-                                 }
-                             });
-        if (!stencil_id) {
-            ImageInfo info{};
-            info.guest_address = desc.info.stencil_addr;
-            info.guest_size = desc.info.stencil_size;
-            info.size = desc.info.size;
-            stencil_id = slot_images.insert(instance, runtime, slot_image_views, info);
-            RegisterImage(stencil_id);
+        // Register meta data for this depth buffer
+        if (desc.info.meta_info.htile_addr) {
+            surface_metas.emplace(desc.info.meta_info.htile_addr,
+                                  MetaDataInfo{.type = MetaType::HTile,
+                                               .clear_mask = image.info.meta_info.htile_clear_mask});
+            image.info.meta_info.htile_addr = desc.info.meta_info.htile_addr;
         }
-        Image& stencil_image = slot_images[stencil_id];
-        TouchImage(stencil_image);
-        stencil_image.AssociateDepth(image_id, image.image_uid);
+
+        // If there is a stencil attachment, link depth and stencil.
+        if (desc.info.stencil_addr != 0) {
+            ImageId stencil_id{};
+            ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
+                                 [&](ImageId image_id, Image& image) {
+                                     if (image.info.guest_address == desc.info.stencil_addr) {
+                                         stencil_id = image_id;
+                                     }
+                                 });
+            if (!stencil_id) {
+                ImageInfo info{};
+                info.guest_address = desc.info.stencil_addr;
+                info.guest_size = desc.info.stencil_size;
+                info.size = desc.info.size;
+                stencil_id = slot_images.insert(instance, runtime, slot_image_views, info);
+                RegisterImage(stencil_id);
+            }
+            Image& stencil_image = slot_images[stencil_id];
+            TouchImage(stencil_image);
+            stencil_image.AssociateDepth(image_id, image.image_uid);
+        }
     }
+    UpdateImage(image_id);
 
     return image.FindView(desc.view_info, false);
 }
