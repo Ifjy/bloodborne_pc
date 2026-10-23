@@ -10,6 +10,10 @@
 #include "gpu/bbnet/bbnet.h"
 #ifndef _WIN32
 #include <dlfcn.h>
+#else
+/* The online modules (gpu/bbnet*, Linux .so builds) are not loaded on Windows: module_handle
+ * stays 0 and these lookups compile away. */
+#define dlsym(handle, name) NULL
 #endif
 #include <limits.h>
 #include <stdio.h>
@@ -43,6 +47,29 @@ int runtime_net_symbol(const char *symbol) {
     for (size_t i=0;i<sizeof(local)/sizeof(*local);++i)
         if (!strncmp(symbol,local[i],strlen(local[i]))) match=0;
     return match;
+}
+
+static void *module_handle;
+
+/* The game's image is ready (probe.c): the module's hooks in it go in now. */
+void runtime_net_image_ready(uintptr_t base, uint64_t size) {
+    if (!module_handle) return;
+    const BbNetImageReadyFn ready=(BbNetImageReadyFn)dlsym(module_handle,"bbnet_image_ready");
+    if (ready) ready(base,size);
+}
+
+/* The game's image is mapped and relocated, its code not yet patched (probe.c). */
+void runtime_net_image_mapped(uint8_t *image, uint64_t size) {
+    if (!module_handle) return;
+    const BbNetImageMappedFn mapped=(BbNetImageMappedFn)dlsym(module_handle,"bbnet_image_mapped");
+    if (mapped) mapped(image,size);
+}
+
+/* The game is loaded and about to run (probe.c): online sessions start. */
+void runtime_net_start(void) {
+    if (!module_handle) return;
+    const BbNetStartFn start=(BbNetStartFn)dlsym(module_handle,"bbnet_start");
+    if (start) start();
 }
 
 /* The module: BB_NET_MODULE, else gpu/libbbnet.so beside bb-probe (where libbbgpu.so is). */
@@ -79,12 +106,14 @@ static BbNetResolveFn module_resolve(void) {
         printf("Online: the online module is not available (%s): offline play\n",dlerror());
         return NULL;
     }
+    module_handle=module;
     const BbNetInitFn init=(BbNetInitFn)dlsym(module,"bbnet_init");
     const BbNetResolveFn found=(BbNetResolveFn)dlsym(module,"bbnet_resolve");
     const BbNetHost host={
         .abi=BBNET_ABI_VERSION, .app0=game_folder, .serial=game_serial, .title=game_title,
         .app_ver=game_version, .thread_spawn=runtime_thread_spawn,
         .thread_join=runtime_thread_join_spawned,
+        .thread_exit=runtime_thread_exit, .memory_is_mapped=runtime_memory_is_mapped,
     };
     if (!init || !found || init(&host)!=0) {
         printf("Online: %s did not start: offline play\n",path);

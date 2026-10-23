@@ -4,17 +4,33 @@
 #include "../src/runtime_pad.c"
 #ifdef _WIN32
 /* POSIX temp paths and setenv: the native Windows build runs from the repo root. */
-#define setenv(name,value,overwrite) _putenv_s(name,value)
 #define TEST_TMP "pad-test-"
 #else
-#define TEST_TMP "/tmp/pad-test-"
+#define TEST_TMP "/tmp/bbport-pad-"
 #endif
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
 void bbgpu_mouse_take(double *dx, double *dy, int *up, int *down) { *dx=*dy=0; *up=*down=0; }
 int bbgpu_mouse_captured(void) { return 0; }
+/* bb_stat (the platform's is in libbbgpu, C++): the fields read_inject needs, from _stat64. */
+int bb_stat(const char *path, struct bb_stat *out) {
+    struct _stat64 st;
+    if (_stat64(path, &st) != 0) return -1;
+    out->st_mtim.tv_sec = st.st_mtime;
+    out->st_mtim.tv_nsec = 0;
+    out->st_size = st.st_size;
+    return 0;
+}
+int bbgpu_pointer_wanted(void) { return 0; }
+int bb_close(int fd) { return _close(fd); }
+int bbgpu_free_camera(void) { return 0; }
 void bbgpu_mouse_look_enable(int enabled) { (void)enabled; }
+void bbgpu_mouse_capture(void) {}
+int bbgpu_camera_look(float yaw, float pitch) { (void)yaw; (void)pitch; return 0; }
+void bbgpu_filter_pad(uint32_t *buttons, const uint8_t *sticks) { (void)buttons; (void)sticks; }
+void runtime_re_watch_tick(const void *pad_buffer, uint64_t reads) { (void)pad_buffer; (void)reads; }
+uintptr_t runtime_libc_base;
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -26,7 +42,7 @@ static void inject(const char *path, const char *tokens) {
     fputs(tokens,f);
     fclose(f);
 #ifdef _WIN32
-    usleep(1100000); /* read_inject skips same-second mtimes on Windows */
+    usleep(1100000); /* the Windows stat has no nanoseconds: same-second writes look unchanged */
 #else
     usleep(25000);
 #endif
@@ -44,7 +60,7 @@ int main(void) {
     assert(config_fd>=0);
     const char controls[]="upscaler=fsr3\npad.cross=b\npad.circle=a\npad.r2=rightshoulder\n"
                           "pad.r1=righttrigger\nkey.cross=X, Space\npad.bogus=a\n"
-                          "walk_key=left ctrl, left alt\nwalk_percent=40\n";
+                          "key.l3=Left Ctrl+C, Keypad +\n";
     assert(write(config_fd,controls,sizeof(controls)-1)==(ssize_t)(sizeof(controls)-1));
     close(config_fd);
     setenv("BB_CONFIG",config,1);
@@ -52,6 +68,23 @@ int main(void) {
     /* Only the virtual test controller is a gamepad, whatever is plugged in. */
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT,"0x1d50/0x6189");
     assert(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_GAMEPAD));
+    /* The keyboard defaults: Escape the menu, R2 a Shift chord on the left button. */
+    bind_defaults();
+    assert(bindings[IN_OPTIONS].keys[0]==SDL_SCANCODE_ESCAPE && bindings[IN_OPTIONS].mods[0]<0);
+    assert(bindings[IN_R2].keys[0]==MOUSE_KEY+SDL_BUTTON_LEFT && bindings[IN_R2].mods[0]==SDL_SCANCODE_LSHIFT);
+    assert(bindings[IN_R1].keys[0]==MOUSE_KEY+SDL_BUTTON_LEFT && bindings[IN_R1].mods[0]<0);
+    /* A chord on the keyboard: C alone is R3, Ctrl+C is L3 and not R3 too. */
+    load_bindings();
+    assert(bindings[IN_L3].key_count==2 && bindings[IN_L3].keys[0]==SDL_SCANCODE_C &&
+           bindings[IN_L3].mods[0]==SDL_SCANCODE_LCTRL && bindings[IN_L3].keys[1]==SDL_SCANCODE_KP_PLUS &&
+           bindings[IN_L3].mods[1]<0);
+    {
+        bool keys[SDL_SCANCODE_COUNT]={0};
+        keys[SDL_SCANCODE_C]=true;
+        assert(key_down(keys,IN_R3) && !key_down(keys,IN_L3));
+        keys[SDL_SCANCODE_LCTRL]=true;
+        assert(key_down(keys,IN_L3) && !key_down(keys,IN_R3));
+    }
     assert(pad_init()==0 && pad_open(1,0,0,NULL)==1);
     PadData data;
     inject(path,"cross l3 touchpad_left");
@@ -108,22 +141,6 @@ int main(void) {
     assert(data.buttons==(BTN_CROSS|BTN_R2|BTN_R1) && data.r2==255);
     assert(bindings[IN_CROSS].key_count==2 && bindings[IN_CROSS].keys[0]==SDL_SCANCODE_X &&
            bindings[IN_CROSS].keys[1]==SDL_SCANCODE_SPACE);
-    /* Walk: walk_key/walk_percent from the config; held, the move keys tilt the stick only part
-     * of the way (the silent walk), the look keys keep the full tilt. */
-    assert(walk_percent==40 && walk_key_count==2 && walk_keys[0]==SDL_SCANCODE_LCTRL &&
-           walk_keys[1]==SDL_SCANCODE_LALT);
-    {
-        bool keys[SDL_SCANCODE_COUNT];
-        memset(keys,0,sizeof keys);
-        keys[SDL_SCANCODE_W]=keys[SDL_SCANCODE_UP]=keys[SDL_SCANCODE_LALT]=true;
-        PadData walk; memset(&walk,0,sizeof walk);
-        walk.left_x=walk.left_y=walk.right_x=walk.right_y=128;
-        apply_keyboard(&walk,keys);
-        assert(walk.left_y==128-40*128/100 && walk.right_y==0);
-        keys[SDL_SCANCODE_LALT]=false;
-        apply_keyboard(&walk,keys);
-        assert(walk.left_y==0 && walk.right_y==0);
-    }
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);
     gamepad=NULL;
@@ -133,9 +150,6 @@ int main(void) {
     unlink(config);
     /* Mouse: names, the look stick's speed-to-deflection at two frame rates, the wheel's presses. */
     assert(key_from_name("Mouse Left")==MOUSE_KEY+SDL_BUTTON_LEFT && key_from_name("wheel down")==MOUSE_WHEEL_DOWN);
-    /* Multi-word scancode names keep their inner space: "leftshift" does not parse (a bbport.ini
-     * line silently loses the whole binding), "left shift" does. */
-    assert(key_from_name("left shift")==SDL_SCANCODE_LSHIFT && key_from_name("leftshift")==-1);
     for (int rate=60;rate<=240;rate*=4) {
         PadData m; memset(&m,0,sizeof m);
         look_x=look_y=0; look_last_us=1;

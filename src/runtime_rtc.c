@@ -73,7 +73,7 @@ static int64_t local_offset(uint64_t utc) {
 #else
     struct tm local;
     localtime_r(&seconds,&local);
-    return (int64_t)local.tm_gmtoff*1000000;
+    return (int64_t)RUNTIME_TM_GMTOFF(local)*1000000;
 #endif
 }
 

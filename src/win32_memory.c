@@ -41,8 +41,16 @@ int win_mem_space(uintptr_t start, uintptr_t end) {
     }
     if (virtual_alloc2(GetCurrentProcess(), (void *)start, end - start, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
                        PAGE_NOACCESS, NULL, 0) != (void *)start) {
-        report("reserving the guest address space", start, end);
-        return -1;
+        /* The platform layer's arena (bb_reserve_arena in runtime_memory_reserve) may already
+         * hold the range; a placeholder reservation of it then fails with ERROR_INVALID_ADDRESS.
+         * Accept an existing reservation over the whole band and map into it. */
+        MEMORY_BASIC_INFORMATION info;
+        if (!(VirtualQuery((void *)start, &info, sizeof(info)) && info.State == MEM_RESERVE &&
+              (uintptr_t)info.BaseAddress <= start &&
+              (uintptr_t)info.BaseAddress + info.RegionSize >= end)) {
+            report("reserving the guest address space", start, end);
+            return -1;
+        }
     }
     space_start = start; space_end = end;
     return 0;

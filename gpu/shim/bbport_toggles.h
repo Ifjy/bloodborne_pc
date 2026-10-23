@@ -12,22 +12,7 @@ extern "C" std::uint64_t runtime_disabled_optimizations;
 /// Temporary experiment bits: the second number in BB_TOGGLE_FILE (runtime_memory.c).
 extern "C" std::uint64_t runtime_experiment_bits;
 /// Recovery point for speculative guest memory reads on this thread (runtime_memory.c).
-/// BB_RECOVER_SET(buf) returns nonzero when the loader's fault handler jumps back to it.
-#ifdef _WIN32
-// No unwinding on Windows: guest frames between the fault and the recovery point have no
-// unwind data. runtime_setjmp/runtime_longjmp (src/runtime_host.c) save and restore every
-// callee-saved register; layout as RuntimeRecoverBuf in src/runtime.h.
-struct alignas(16) BbRecoverBuf {
-    unsigned char registers[256];
-};
-extern "C" __thread BbRecoverBuf* runtime_fault_recover;
-extern "C" int runtime_setjmp(BbRecoverBuf* buf) __attribute__((returns_twice));
-#define BB_RECOVER_SET(buf) runtime_setjmp(&(buf))
-#else
-typedef sigjmp_buf BbRecoverBuf;
-extern "C" __thread BbRecoverBuf* runtime_fault_recover;
-#define BB_RECOVER_SET(buf) sigsetjmp(buf, 0)
-#endif
+extern "C" __thread sigjmp_buf* runtime_fault_recover;
 
 namespace BbToggle {
 enum : std::uint64_t {
@@ -40,7 +25,7 @@ enum : std::uint64_t {
     LockFreeUploadCheck = 64,
     FindImageCache = 128,
     DeferredUploads = 256,
-    AccessMemo = 512,
+    AccessMemo = 512, ///< retired (the access tracker merges ranges itself)
     TextureBindingMemo = 1024,
     CoarseReadTracking = 2048,
     PreparedResources = 4096,
@@ -70,6 +55,8 @@ enum : std::uint64_t {
     SampleSceneProxies = 1ull << 48,
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
+    /// Clears of proxied scene images clear the proxy too instead of resolving it first.
+    SceneClearProxies = 1ull << 20,
     UpdateImageFastPath = 1u << 30,
     /// Bit set: the texture collector frees nothing (A/B of its evictions while the game runs).
     TextureCollector = 1ull << 31,
@@ -133,6 +120,7 @@ inline std::atomic<std::uint64_t> late_vram_writes{0}; ///< labels and the like 
 inline std::atomic<std::uint64_t> shadow_copies{0}, shadow_bytes{0};
 /// BB_HONEST_LABELS: submissions sent early because the GPU had finished everything before them.
 inline std::atomic<std::uint64_t> idle_flushes{0};
+inline std::atomic<std::uint64_t> drain_flushes{0}; ///< submissions sent as the GPU reached the last one
 /// EOP fences with data: decoded, and their labels written (a growing gap: lost fences, guest leaks).
 inline std::atomic<std::uint64_t> eop_decoded{0}, eop_written{0}, gpu_labels{0};
 /// sceGnmAreSubmitsAllowed calls, and those that answered no (submission lock held).
@@ -216,6 +204,10 @@ inline std::atomic<std::uint32_t> coarse_second{0};
 /// VRAM blocks moved back in place when idle, unbound with the memory the game unmapped, and
 /// residency chunks given back to the driver.
 inline std::atomic<std::uint64_t> vram_idle_bytes{0}, vram_unmapped_bytes{0}, vram_chunks_freed_bytes{0};
+/// Dynamic blocks the loaders wrote whole since: they may have a VRAM copy again (ProcessPendingAssets).
+inline std::atomic<std::uint64_t> dynamic_reloaded_bytes{0};
+/// GPU writes (binding sizes) kept in place because the CPU wrote their blocks (layer_cpu_blocks).
+inline std::atomic<std::uint64_t> gpu_writes_kept_by_cpu_bytes{0};
 /// Residency chunks, chunks sent away (ProcessIdleBlocks), and their blocks that had to stay.
 inline std::atomic<std::uint64_t> residency_chunk_count{0}, evacuations{0}, evac_kept_gpu{0}, evac_kept_other{0};
 /// Images the collector passed over (GPU-written, not evictable without memory pressure).

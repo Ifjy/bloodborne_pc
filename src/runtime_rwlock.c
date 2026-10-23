@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <pthread.h>
+#endif
 #include <errno.h>
 #include <limits.h>
 typedef struct { int64_t seconds, nanoseconds; } GuestTime;
@@ -176,15 +179,15 @@ static ABI int32_t rw_destroy(Rwlock **handle) {
     host_unlock(&registry_lock); return error(e);
 }
 uintptr_t runtime_rwlock_resolve(const char *name) {
-    if (!strcmp(name,"6ULAa0fq4jA#p#J")) return (uintptr_t)rw_init;
-    if (!strcmp(name,"BB+kb08Tl9A#p#J")) return (uintptr_t)rw_destroy;
-    if (!strcmp(name,"Ox9i0c7L5w0#p#J")) return (uintptr_t)rw_read;
-    if (!strcmp(name,"mqdNorrB+gI#p#J")) return (uintptr_t)rw_write;
-    if (!strcmp(name,"XD3mDeybCnk#p#J")) return (uintptr_t)rw_tryread;
-    if (!strcmp(name,"bIHoZCTomsI#p#J")) return (uintptr_t)rw_trywrite;
-    if (!strcmp(name,"+L98PIbGttk#p#J")) return (uintptr_t)rw_unlock;
-    if (!strcmp(name,"iPtZRWICjrM#p#J")) return (uintptr_t)rw_timedread;
-    if (!strcmp(name,"adh--6nIqTk#p#J")) return (uintptr_t)rw_timedwrite;
+    if (runtime_nid_is(name, "6ULAa0fq4jA")) return (uintptr_t)rw_init;
+    if (runtime_nid_is(name, "BB+kb08Tl9A")) return (uintptr_t)rw_destroy;
+    if (runtime_nid_is(name, "Ox9i0c7L5w0")) return (uintptr_t)rw_read;
+    if (runtime_nid_is(name, "mqdNorrB+gI")) return (uintptr_t)rw_write;
+    if (runtime_nid_is(name, "XD3mDeybCnk")) return (uintptr_t)rw_tryread;
+    if (runtime_nid_is(name, "bIHoZCTomsI")) return (uintptr_t)rw_trywrite;
+    if (runtime_nid_is(name, "+L98PIbGttk")) return (uintptr_t)rw_unlock;
+    if (runtime_nid_is(name, "iPtZRWICjrM")) return (uintptr_t)rw_timedread;
+    if (runtime_nid_is(name, "adh--6nIqTk")) return (uintptr_t)rw_timedwrite;
     return 0;
 }
 void runtime_rwlock_report(void) {

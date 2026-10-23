@@ -39,13 +39,30 @@
 #define PATH_MAX 1024
 #endif
 
-/* POSIX calls with a Windows implementation. */
+/* POSIX calls with a Windows implementation. The 0.6 platform layer (bbport_posix_c.h,
+ * included first) renames the same calls to its own bb_* versions; these stay for the files
+ * compiled without it. */
+#ifndef mkdir
 #define mkdir(path, mode) runtime_win_mkdir(path, mode)
+#endif
+#ifndef rename
 #define rename(from, to) runtime_win_rename(from, to)
+#endif
+#ifndef fsync
 #define fsync(fd) _commit(fd)
+#endif
+#ifndef realpath
 #define realpath(path, resolved) _fullpath(resolved, path, PATH_MAX)
+#endif
+#ifndef pread
 #define pread runtime_win_pread
+#endif
+#ifndef pwrite
 #define pwrite runtime_win_pwrite
+#endif
+#ifndef setenv
+#define setenv(name, value, overwrite) _putenv_s(name, value)
+#endif
 int runtime_win_mkdir(const char *path, int mode);
 int runtime_win_rename(const char *from, const char *to);
 int64_t runtime_win_pread(int fd, void *buffer, size_t size, int64_t offset);

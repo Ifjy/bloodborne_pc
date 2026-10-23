@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "bbport_write_log.h"
-#include "bbport_ucontext.h"
 #include "bbport_free_check.h"
 
 #include <array>
@@ -8,13 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <x86intrin.h>
-#include "bbport_platform.h"
-#ifdef _WIN32
-#include <windows.h>
-#else
 #include <ucontext.h>
-#endif
+#include <unistd.h>
+#include <x86intrin.h>
 
 namespace BbWriteLog {
 namespace {
@@ -61,8 +56,14 @@ void Note(std::uint64_t address, const void* data, std::uint64_t size, Source so
     }
 }
 
+void NoteMirrorCopy(std::uint64_t address, std::uint64_t size) {
+    if (!Enabled()) return;
+    const std::array<unsigned char, 64> no_data{};
+    Record(address, no_data.data(), size, MirrorCopyIntent);
+}
+
 void Record(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
-    static thread_local const std::uint32_t tid = BbPlatform::CurrentThreadId();
+    static thread_local const std::uint32_t tid = static_cast<std::uint32_t>(gettid());
     Entry e{address, size, 0, __rdtsc(), source, tid};
     std::memcpy(&e.first, data, size < 8 ? size : 8);
     Push(ring, head, e);
@@ -89,7 +90,8 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
         return;
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
-                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
+                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
+                             "GPU mirror copy (queued)"};
     const std::uint64_t now = __rdtsc(), n = head.load();
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
@@ -97,7 +99,7 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
         if (e.address < address + size && address < e.address + e.size) {
             std::fprintf(stderr,
                          "Write log: into range %s %#llx +%llu first %#llx tid %u, %.3f s before\n",
-                         e.source < 7 ? sources[e.source] : "?", (unsigned long long)e.address,
+                         e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                          (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
                          double(now - e.tsc) / 3.0e9);
             ++shown;
@@ -108,10 +110,9 @@ void DumpRange(std::uint64_t address, std::uint64_t size) {
 }
 } // namespace BbWriteLog
 
-// Linux: a ucontext_t from the SIGSEGV handler; Windows: the vectored handler's EXCEPTION_POINTERS.
 extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     using namespace BbWriteLog;
-    const auto* uc = UCONTEXT(ucontext);
+    const auto* uc = static_cast<const ucontext_t*>(ucontext);
     const auto* g = uc->uc_mcontext.gregs;
     BbFreeCheck::DumpAtFault(std::uint64_t(g[REG_RAX]), std::uint64_t(g[REG_R14]));
     if (Mode() == 0) {
@@ -126,34 +127,16 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
         std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
     }
     const char* sources[] = {"backing",      "WriteData",           "fence",
-                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData"};
+                             "EOP (decoded)", "WriteData (decoded)", "EOS (decoded)", "DmaData",
+                             "GPU mirror copy (queued)"};
     const std::uint64_t now = __rdtsc();
     const auto print = [&](const Entry& e, const char* what) {
         std::fprintf(stderr,
                      "Write log: %s %s %#llx +%llu first %#llx tid %u, %.3f s before the fault\n",
-                     what, e.source < 7 ? sources[e.source] : "?", (unsigned long long)e.address,
+                     what, e.source < 8 ? sources[e.source] : "?", (unsigned long long)e.address,
                      (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
                      double(now - e.tsc) / 3.0e9);
     };
-    if (!ucontext) {
-        // A GPU library assertion (common/assert.cpp), e.g. a corrupted command stream: no
-        // guest fault, so no registers or block; the pattern hits and the latest writes.
-        std::fputs("Write log: dumped at a GPU assertion (no fault context)\n", stderr);
-        const std::uint64_t nh = hits_head.load();
-        for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {
-            print(hits[i % hits.size()], "pattern");
-        }
-        const std::uint64_t n = head.load();
-        int shown = 0;
-        for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64; ++shown) {
-            print(ring[i % Size], "recent");
-        }
-        std::fprintf(stderr, "Write log: %llu writes logged\n", (unsigned long long)n);
-        return;
-    }
-    for (int i = 0; i < 8; ++i) {
-        std::fprintf(stderr, "Write log: %s=%#llx\n", names[i], (unsigned long long)regs[i]);
-    }
     const std::uint64_t nh = hits_head.load();
     for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {
         print(hits[i % hits.size()], "pattern");
@@ -190,11 +173,11 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     int shown = 0;
     for (std::uint64_t i = n; i-- > (n > Size ? n - Size : 0) && shown < 64;) {
         const Entry& e = ring[i % Size];
-        bool nearby = false;
+        bool near = false;
         for (const auto r : regs) {
-            nearby |= r + 0x1000 > e.address && r < e.address + e.size + 0x1000;
+            near |= r + 0x1000 > e.address && r < e.address + e.size + 0x1000;
         }
-        if (nearby) {
+        if (near) {
             print(e, "near");
             ++shown;
         }
