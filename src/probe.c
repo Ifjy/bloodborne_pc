@@ -457,6 +457,14 @@ void runtime_restart(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /* The guest's thread pointer needs a TEB TLS slot below 64 (gs:[0x1480 + slot*8]): DLLs
+     * loaded later (SDL, the Vulkan driver) take those, so claim ours before anything else. */
+    {
+        extern int bb_guest_tls_slot(void);
+        bb_guest_tls_slot();
+    }
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the

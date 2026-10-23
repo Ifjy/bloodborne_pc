@@ -370,6 +370,9 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
 }
 /* First-fit search in the PS4 user range, starting from the hint. */
 static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
+    /* The kernel's own placements are 64 KiB granular (the PS4's, and the Windows arena's
+     * placeholders need it): never honor a smaller alignment for a chosen address. */
+    if (alignment<0x10000) alignment=0x10000;
     uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
     for (size_t i=vma_index(at); at+size<=USER_MAX; ++i) {
         if (i==vma_count || vmas[i].start>=at+size) return at;
@@ -787,11 +790,12 @@ void *runtime_low_map(size_t size, int prot) {
      * mappings are 64 KiB granular there. */
 #ifdef _WIN32
     const uint64_t granule=UINT64_C(65536);
-    const int flags=MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED;
 #else
     const uint64_t granule=PAGE;
-    const int flags=MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE;
 #endif
+    /* NOREPLACE on both: the shim layers map their hook stubs in this band too; a plain
+     * MAP_FIXED walk over them is what crashed the game jumping into a stub. */
+    const int flags=MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE;
     size=align_up(size,PAGE);
     write_lock();
     void *p=MAP_FAILED;

@@ -245,6 +245,10 @@ void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset
         return MAP_FAILED;
     }
     if (fixed && InArena(start, start + size)) {
+        if (start & 0xFFFF)
+            std::fprintf(stderr,
+                         "mmap fixed in arena at sub-64K address %#llx size %#zx flags %#x\n",
+                         (unsigned long long)start, size, flags);
         if ((flags & MAP_FIXED_NOREPLACE)) {
             auto it = pieces.upper_bound(start);
             --it;
