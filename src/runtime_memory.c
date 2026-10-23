@@ -638,11 +638,9 @@ static int32_t protect_locked(uintptr_t start, uint64_t size, int prot, int type
     uintptr_t end=start+align_up(size,PAGE);
     start&=~(uintptr_t)(PAGE-1);
     if ((prot & ~0x37) || !covered(start,end,0)) return INVALID;
-#ifdef _WIN32
-    if (win_mem_protect(start,end,host_prot(prot))) return INVALID;
-#else
+    /* The platform layer's mprotect walks the arena's pieces on Windows too (the old
+     * win_mem_protect view table went away with the arena). */
     if (mprotect((void *)start,end-start,host_prot(prot))) return INVALID;
-#endif
     trap_reapply(start,end); /* pages with write traps stay read-only */
     int error; size_t i=carve(start,end,&error);
     if (error) return NO_MEMORY;
@@ -953,11 +951,7 @@ static void trap_apply(uintptr_t a, uintptr_t b, int level) {
         if (vmas[i].kind==KIND_RESERVED) continue;
         const uintptr_t s=vmas[i].start>a ? vmas[i].start : a, e=vmas[i].end<b ? vmas[i].end : b;
         const int prot=host_prot(vmas[i].prot);
-#ifdef _WIN32
-        win_mem_protect(s,e,host_prot(level==2 ? 0 : level ? (prot & ~PROT_WRITE) : prot));
-#else
         mprotect((void *)s,e-s,level==2 ? PROT_NONE : level ? (prot & ~PROT_WRITE) : prot);
-#endif
     }
 }
 /* No traps in [start, end) any more: a mapping replaced or gone (runtime lock held). */
@@ -1165,11 +1159,7 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
         uintptr_t b=vmas[i].end<address+size ? vmas[i].end : address+size;
         int guest=host_prot(vmas[i].prot);
         int want=(read ? PROT_READ : 0)|(write ? PROT_WRITE|PROT_READ : 0)|(guest & PROT_EXEC);
-#ifdef _WIN32
-        win_mem_protect(a,b,guest & want);
-#else
         mprotect((void *)a,b-a,guest & want);
-#endif
     }
     read_unlock();
 }
