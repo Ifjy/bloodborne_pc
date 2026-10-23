@@ -30,6 +30,12 @@ class BloodbornePCLauncher {
         Environment.SetEnvironmentVariable("PYTHONUTF8", "1");
         Environment.SetEnvironmentVariable("PYTHONIOENCODING", "utf-8");
         Environment.SetEnvironmentVariable("BB_PREBUILT", "1");
+        /* 0.6's memory model: the GPU uses the game's direct memory in place (its chunks
+         * exported to Vulkan; host memory import on Windows), as run.sh sets for the Linux
+         * builds. Without it the port falls back to the 0.3 copies model, which flickers
+         * with 0.6's renderer. ANY_GPU: NVIDIA too (the module, not the sparse arena). */
+        Environment.SetEnvironmentVariable("BB_GUEST_IN_PLACE", "1");
+        Environment.SetEnvironmentVariable("BB_PC_MODEL_ANY_GPU", "1");
         Environment.SetEnvironmentVariable("BB_DATA_DIR", root);
         Environment.SetEnvironmentVariable("BB_GAME_DIR", game);
         Environment.SetEnvironmentVariable("BB_PYTHON", python);

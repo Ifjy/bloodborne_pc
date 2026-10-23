@@ -236,6 +236,9 @@ void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset
     std::scoped_lock lock{memory_mutex};
     // The arena's placeholder splits are 64 KiB granular: an unrounded size fails them
     // (error 87). Round up here for every caller, as Linux rounds to the page.
+    if ((reinterpret_cast<uintptr_t>(address) + size) & 0xFFFF)
+        std::fprintf(stderr, "mmap arena sub-64K end: %#llx +%#zx flags %#x\n",
+                     (unsigned long long)(uintptr_t)address, size, flags);
     size = (size + 0xFFFFull) & ~0xFFFFull;
     const auto start = reinterpret_cast<uintptr_t>(address);
     const bool fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
@@ -297,6 +300,9 @@ void* mmap(void* address, size_t size, int prot, int flags, int fd, off_t offset
 int munmap(void* address, size_t size) {
     std::scoped_lock lock{memory_mutex};
     // As in mmap: the placeholder splits are 64 KiB granular.
+    if ((reinterpret_cast<uintptr_t>(address) + size) & 0xFFFF)
+        std::fprintf(stderr, "munmap sub-64K end: %#llx +%#zx\n",
+                     (unsigned long long)(uintptr_t)address, size);
     size = (size + 0xFFFFull) & ~0xFFFFull;
     const auto start = reinterpret_cast<uintptr_t>(address);
     if (InArena(start, start + size)) {
